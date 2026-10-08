@@ -4,62 +4,45 @@ using Microsoft.ML.Data;
 
 var mlcontext = new MLContext(seed: 0);
 
-string filepath = AppContext.BaseDirectory + "cars.csv";
+string filepath = AppContext.BaseDirectory + "reviews.tsv";
 
-var fileloader = mlcontext.Data.LoadFromTextFile<CarsData>(filepath, new TextLoader.Options
+var data = mlcontext.Data.LoadFromTextFile<SentimentData>(filepath, new TextLoader.Options
 {
-    HasHeader = true,
-    Separators = new[] { ',' },
-    MissingRealsAsNaNs = true,
+    HasHeader = false,
+    Separators = new[] {'\t'}
 });
 
-var pipeline = mlcontext.Transforms.ReplaceMissingValues(outputColumnName: "FilledAge",inputColumnName: "Age", 
-    replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.Mean)
-    
-    .Append(mlcontext.Transforms.ReplaceMissingValues(outputColumnName: "FilledMileage",inputColumnName: "Mileage",
-    replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.Mean))
-    
-    .Append(mlcontext.Transforms.Categorical.OneHotEncoding(outputColumnName: "BrandEncoded",inputColumnName: "Brand"))
-    
-    .Append(mlcontext.Transforms.Concatenate("Features", "FilledAge","FilledMileage", "BrandEncoded")).
-    
-    Append(mlcontext.Transforms.NormalizeMinMax("Features"));
+var splits = mlcontext.Data.TrainTestSplit(data, testFraction: 0.2, seed: 2);
 
+var pipeline = mlcontext.Transforms.Text.FeaturizeText("Features", nameof(SentimentData.Text)).Append(
+                mlcontext.BinaryClassification.Trainers.
+                SdcaLogisticRegression(labelColumnName: "Label", featureColumnName: "Features")
+    );
 
-var splits = mlcontext.Data.TrainTestSplit(fileloader, testFraction: 0.2, seed: 1);
-var traindata = splits.TrainSet;
-var testdata = splits.TestSet;
+Console.WriteLine("Training...");
 
-var transformer = pipeline.Fit(traindata);
+var model = pipeline.Fit(splits.TrainSet);
 
-IDataView traindataview = transformer.Transform(traindata);
+var predictionsset = model.Transform(splits.TestSet);
 
-IDataView testdataview = transformer.Transform(testdata);
+var metrix = mlcontext.BinaryClassification.Evaluate(predictionsset, labelColumnName: "Label");
 
-var preview = traindataview.Preview(maxRows: 8);
+Console.WriteLine($"Accuracy: {metrix.Accuracy:P1}");
+Console.WriteLine($"F1 Score: {metrix.F1Score:P1}");
+Console.WriteLine($"AUC: {metrix.AreaUnderRocCurve:P1}");
 
-foreach (var row in preview.RowView)
-{
-    Console.WriteLine(string.Join(" | ", row.Values.Select(v => $"{v.Key}={v.Value}")));
-}
-
-Console.WriteLine("**************************************");
-
-var testpreivew = testdataview.Preview(maxRows: 8);
-
-foreach (var row in testpreivew.RowView)
-{
-    Console.WriteLine(string.Join(" | ", row.Values.Select(v => $"{v.Key}={v.Value}")));
-}
-
-public class CarsData
+public class SentimentData
 {
     [LoadColumn(0)]
-    public string Brand { get; set; }
-    [LoadColumn(1)]
-    public float Age { get; set; }
-    [LoadColumn(2)]
-    public float Mileage { get; set; }
-    [LoadColumn(3)]
-    public float Price { get; set; }
+    public string Text { get; set; }
+    [LoadColumn(1), ColumnName("Label")]
+    public bool Sentiment { get; set; }
+}
+
+public class SentimentPredictions
+{
+    [ColumnName("PredictionLabel")]
+    public bool IsPositive { get; set; }
+    public float Score { get; set; }
+    public float Probability { get; set; }
 }
