@@ -2,64 +2,58 @@
 using Microsoft.ML;
 using Microsoft.ML.Data;
 
-var mlcontext = new MLContext(seed: 0);
+var mlContext = new MLContext(seed: 0);
 
-string filepath = AppContext.BaseDirectory + "reviews.tsv";
+string filepath = AppContext.BaseDirectory + "tickets.tsv";
 
-var data = mlcontext.Data.LoadFromTextFile<SentimentData>(filepath, new TextLoader.Options
+var data = mlContext.Data.LoadFromTextFile<Ticket>(filepath, new TextLoader.Options
 {
     HasHeader = false,
-    Separators = new[] {'\t'}
+    Separators = new[] { '\t' }
 });
 
-var splits = mlcontext.Data.TrainTestSplit(data, testFraction: 0.2, seed: 2);
+var splits = mlContext.Data.TrainTestSplit(data, testFraction: 0.2, seed: 2);
 
-var pipeline = mlcontext.Transforms.Text.FeaturizeText("Features", nameof(SentimentData.Text)).Append(
-                mlcontext.BinaryClassification.Trainers.
-                SdcaLogisticRegression(labelColumnName: "Label", featureColumnName: "Features")
-    );
 
-Console.WriteLine("Training...");
+var pipeline = mlContext.Transforms.Conversion.MapValueToKey("Label", nameof(Ticket.Category)).
+                Append(mlContext.Transforms.Text.FeaturizeText("Features", nameof(Ticket.Text))).Append(
+                mlContext.MulticlassClassification.Trainers.SdcaMaximumEntropy("Label", "Features")).Append(
+                mlContext.Transforms.Conversion.MapKeyToValue("PredictedCategory", "PredictedLabel"));
 
 var model = pipeline.Fit(splits.TrainSet);
 
-var predictionsset = model.Transform(splits.TestSet);
+var prediction = model.Transform(splits.TestSet);
 
-var metrix = mlcontext.BinaryClassification.Evaluate(predictionsset, labelColumnName: "Label");
+var metrics = mlContext.MulticlassClassification.Evaluate(prediction, labelColumnName: "Label");
 
-Console.WriteLine($"Accuracy: {metrix.Accuracy:P1}");
-Console.WriteLine($"F1 Score: {metrix.F1Score:P1}");
-Console.WriteLine($"AUC: {metrix.AreaUnderRocCurve:P1}");
 
-mlcontext.Model.Save(model, data.Schema, "sentiment.zip");
+Console.WriteLine(metrics.MicroAccuracy);
+Console.WriteLine(metrics.MacroAccuracy);
+Console.WriteLine(metrics.ConfusionMatrix.GetFormattedConfusionTable());
 
-var loadedmodel = mlcontext.Model.Load("sentiment.zip", out _);
+var engine = mlContext.Model.CreatePredictionEngine<Ticket, TicketPrediction>(model);
 
-var engine = mlcontext.Model.CreatePredictionEngine<SentimentData, SentimentPredictions>(loadedmodel);
+var predict = engine.Predict(new Ticket { Text = "the coffee is good" });
 
-string[] tests = ["This place is amazing, i'll visit again", "Coffee taste is bad and staff behaviour is bad.", "pizza is not good but coffee was good"];
+Console.WriteLine($"Class: {predict.Category}");
 
-foreach(var  test in tests)
-{
-    var p = engine.Predict(new SentimentData { Text = test });
+var best = predict.Scores.Max();
 
-    float confidence = p.IsPositive ? p.Probability : 1 - p.Probability;
+Console.WriteLine(best);
+Console.WriteLine(best > 0.75 ? $"Escalated to {predict.Category}." : "Send it to Human Agent");
 
-    Console.WriteLine($"This review is {(p.IsPositive ? "Positive" : "Negative")}. {confidence:P0}, {test}");
-}
-
-public class SentimentData
+public class Ticket
 {
     [LoadColumn(0)]
-    public string Text { get; set; }
-    [LoadColumn(1), ColumnName("Label")]
-    public bool Sentiment { get; set; }
+    public string Category { get; set; } = string.Empty;
+    [LoadColumn(1)]
+    public string Text { get; set; } = string.Empty;
 }
 
-public class SentimentPredictions
+public class TicketPrediction
 {
-    [ColumnName("PredictedLabel")]
-    public bool IsPositive { get; set; }
-    public float Score { get; set; }
-    public float Probability { get; set; }
+    [ColumnName("PredictedCategory")]
+    public string Category { get; set; } = "";
+    [ColumnName("Score")]
+    public float[] Scores { get; set; } = [];
 }
