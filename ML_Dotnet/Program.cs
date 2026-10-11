@@ -1,59 +1,78 @@
-﻿
-using Microsoft.ML;
+﻿using Microsoft.ML;
 using Microsoft.ML.Data;
 
 var mlContext = new MLContext(seed: 0);
 
-string filepath = AppContext.BaseDirectory + "tickets.tsv";
+var random = new Random(42);
+string[] cities = ["Austin", "Denver", "Seatle"];
 
-var data = mlContext.Data.LoadFromTextFile<Ticket>(filepath, new TextLoader.Options
+var houses = Enumerable.Range(1, 600).Select(_ =>
 {
-    HasHeader = false,
-    Separators = new[] { '\t' }
-});
+    var city = cities[random.Next(cities.Length)];
+    var age = random.Next(1, 30);
+    var bedroom = random.Next(1, 6);
+    var squarefeet = random.Next(600, 4000);
+    var citybonus = city switch
+    {
+        "Seatle" => 120000,
+        "Denver" => 60000,
+        _ => 30000
+    };
+
+    float noise = random.Next(-20000, 20000);
+
+    float price = 50000 + squarefeet * 150 + bedroom * 10000 - age * 800 + noise + citybonus;
+
+    return new House
+    {
+        City = city,
+        Age = age,
+        Bedroom = bedroom,
+        Price = price,
+        SqareFeet = squarefeet,
+    };
+
+
+}).ToList();
+
+var data = mlContext.Data.LoadFromEnumerable<House>(houses);
 
 var splits = mlContext.Data.TrainTestSplit(data, testFraction: 0.2, seed: 2);
 
+var pipleline = mlContext.Transforms.Categorical.OneHotEncoding("CityEncoded", nameof(House.City)).
+                Append(mlContext.Transforms.Concatenate("Features", "CityEncoded", nameof(House.Age),
+                nameof(House.Bedroom), nameof(House.SqareFeet))).
+                Append(mlContext.Regression.Trainers.FastTreeTweedie(labelColumnName: nameof(House.Price), featureColumnName: "Features"));
 
-var pipeline = mlContext.Transforms.Conversion.MapValueToKey("Label", nameof(Ticket.Category)).
-                Append(mlContext.Transforms.Text.FeaturizeText("Features", nameof(Ticket.Text))).Append(
-                mlContext.MulticlassClassification.Trainers.SdcaMaximumEntropy("Label", "Features")).Append(
-                mlContext.Transforms.Conversion.MapKeyToValue("PredictedCategory", "PredictedLabel"));
+var model = pipleline.Fit(splits.TrainSet);
 
-var model = pipeline.Fit(splits.TrainSet);
+var predictions = model.Transform(splits.TestSet);
 
-var prediction = model.Transform(splits.TestSet);
-
-var metrics = mlContext.MulticlassClassification.Evaluate(prediction, labelColumnName: "Label");
+var evaluation = mlContext.Regression.Evaluate(predictions, labelColumnName: nameof(House.Price));
 
 
-Console.WriteLine(metrics.MicroAccuracy);
-Console.WriteLine(metrics.MacroAccuracy);
-Console.WriteLine(metrics.ConfusionMatrix.GetFormattedConfusionTable());
+Console.WriteLine($"R-Square: {evaluation.RSquared}");
+Console.WriteLine($"Mean Absolute Error: {evaluation.MeanAbsoluteError}");
+Console.WriteLine($"Root Mean Square Error: {evaluation.RootMeanSquaredError}");
 
-var engine = mlContext.Model.CreatePredictionEngine<Ticket, TicketPrediction>(model);
+var engine = mlContext.Model.CreatePredictionEngine<House, PricePrediction>(model);
 
-var predict = engine.Predict(new Ticket { Text = "the coffee is good" });
+var predict = engine.Predict(new House { Age = 30, Bedroom = 4, City = "Seatle", SqareFeet = 2100 });
 
-Console.WriteLine($"Class: {predict.Category}");
+Console.WriteLine(predict.Price);
 
-var best = predict.Scores.Max();
-
-Console.WriteLine(best);
-Console.WriteLine(best > 0.75 ? $"Escalated to {predict.Category}." : "Send it to Human Agent");
-
-public class Ticket
+public class House
 {
-    [LoadColumn(0)]
-    public string Category { get; set; } = string.Empty;
-    [LoadColumn(1)]
-    public string Text { get; set; } = string.Empty;
+    public string City { get; set; } = "";
+    public float Age { get; set; }
+    public float Bedroom { get; set; }
+    public float Price { get; set; }
+    public float SqareFeet { get; set; }
 }
 
-public class TicketPrediction
+
+public class PricePrediction 
 {
-    [ColumnName("PredictedCategory")]
-    public string Category { get; set; } = "";
     [ColumnName("Score")]
-    public float[] Scores { get; set; } = [];
+    public float Price { get; set; }
 }
