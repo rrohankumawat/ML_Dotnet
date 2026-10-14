@@ -1,69 +1,67 @@
 ﻿using Microsoft.ML;
-using Microsoft.ML.Data;
 
 var mlContext = new MLContext(seed: 0);
 
-var random = new Random(10);
-List<Customer> customers = new();
+var random = new Random(5);
 
-void GenerateCustomers(int count , float income, float spending)
+Purchase NormalPurchase()
 {
-    for(int i = 0; i < count; i++)
+    float items = random.Next(1, 11);
+    return new Purchase
     {
-        customers.Add(new Customer
-        {
-            AnualIncomeK = income + random.Next(-8, 8),
-            SpendingScore = spending + random.Next(-8, 8)
-        });
-    }
+        Items = items,
+        Amount = items * 12 + random.Next(-10, 10),
+        WeightKg = items * 0.8f + (float)(random.NextDouble() - 0.5)
+    };
 }
 
-GenerateCustomers(200, 30, 70);
-GenerateCustomers(200, 85, 65);
-GenerateCustomers(200, 80, 15);
+var trainRows = Enumerable.Range(0, 500).Select(_ => NormalPurchase()).ToList();
 
-var data = mlContext.Data.LoadFromEnumerable<Customer>(customers);
+var testRows = Enumerable.Range(0, 200).Select(_ => NormalPurchase()).ToList();
+testRows.Add(new Purchase { Items = 1, Amount = 900, WeightKg = 0.8f });   
+testRows.Add(new Purchase { Items = 2, Amount = 700, WeightKg = 1.6f });   
+testRows.Add(new Purchase { Items = 10, Amount = 4, WeightKg = 8.0f });   
 
-var splits = mlContext.Data.TrainTestSplit(data, testFraction:0.2, seed:5);
+IDataView trainData = mlContext.Data.LoadFromEnumerable(trainRows);
+IDataView testData = mlContext.Data.LoadFromEnumerable(testRows);
 
-var pipeline = mlContext.Transforms.Concatenate("Features", nameof(Customer.AnualIncomeK), nameof(Customer.SpendingScore)).
-                Append(mlContext.Transforms.NormalizeMinMax("Features")).
-                Append(mlContext.Clustering.Trainers.KMeans("Features", numberOfClusters: 3));
+var pipeline = mlContext.Transforms.Concatenate("Features", nameof(Purchase.Items), nameof(Purchase.Amount),
+    nameof(Purchase.WeightKg)).Append(mlContext.Transforms.NormalizeMinMax("Features")).
+    Append(mlContext.AnomalyDetection.Trainers.RandomizedPca("Features", rank: 1));
 
-var model = pipeline.Fit(splits.TrainSet);
 
-var transform = model.Transform(splits.TestSet);
+var model = pipeline.Fit(trainData);
 
-var evaluation = mlContext.Clustering.Evaluate(transform, scoreColumnName: "Score", featureColumnName: "Features");
+var purchaseScore = mlContext.Data.CreateEnumerable<PurchaseResult>(model.Transform(trainData), reuseRowObject: false).
+    Select(x => x.Score).OrderBy(x => x).ToArray();
 
-Console.WriteLine(evaluation.AverageDistance);
-Console.WriteLine(evaluation.DaviesBouldinIndex);
 
-var engine = mlContext.Model.CreatePredictionEngine<Customer, CustomerPrediction>(model);
+var cutoff = purchaseScore[(int)(purchaseScore.Length * 0.99)];
 
-var predict = engine.Predict(new Customer
+
+var result = mlContext.Data.CreateEnumerable<PurchaseResult>(model.Transform(testData), reuseRowObject: false);
+
+Console.WriteLine($"Cut Off: {cutoff}");
+Console.WriteLine($"Average score for test purchase : {result.Average(x=>x.Score)}");
+
+
+foreach(var purchase in result.OrderByDescending(x => x.Score).Take(5))
 {
-    AnualIncomeK = 50,
-    SpendingScore = 70
-});
-
-Console.WriteLine($"Clustered Id is :{predict.ClustedId}");
-
-
-//low income - high spender
-//high income - high spender
-//high income - low spender
-
-public class Customer
-{
-    public float AnualIncomeK { get; set; }
-    public float SpendingScore { get; set; }
+    Console.WriteLine($"Items: {purchase.Items}, Amount : {purchase.Amount}, " +
+        $"WeightKgs {purchase.WeightKg}, Score : {purchase.Score}");
 }
 
-public class CustomerPrediction
+public class Purchase
 {
-    [ColumnName("PredictedLabel")]
-    public uint ClustedId { get; set; }
-    [ColumnName("Score")]
-    public float[] Distances { get; set; }
+    public float Items { get; set; }
+    public float Amount { get; set; }
+    public float WeightKg { get; set; }
+}
+
+public class PurchaseResult
+{
+    public float Items { get; set; }
+    public float Amount { get; set; }
+    public float WeightKg { get; set; }
+    public float Score { get; set; }
 }
