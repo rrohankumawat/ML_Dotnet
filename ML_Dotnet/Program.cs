@@ -1,65 +1,65 @@
-﻿
-using Microsoft.ML;
-using Microsoft.ML.Trainers;
-using Microsoft.ML.Transforms.TimeSeries;
-using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using Microsoft.ML;
+using Microsoft.ML.Data;
 
-var mlContext = new MLContext(seed: 0);
-var random = new Random(15);
+const string ModelFile = "models/model.onnx";
+const string LabelsFile = "models/synset.txt";
+const string ImageFolder = "images";
+const string ImageName = "cat.jpg";
+const string InputName = "input";   
+const string OutputName = "output";  
+const int PixelsPerColour = 224 * 224;
 
-var sales = Enumerable.Range(0, 48)
-  .Select(month => new MonthlySales
-  {
-      Sales = (float)(
-      1000 + month * 15
-      + 200 * Math.Sin(2 * Math.PI * month / 12)
-      + random.Next(-30, 30))
-  }).ToList();
+float[] mean = { 0.485f, 0.456f, 0.406f };
+float[] std = { 0.229f, 0.224f, 0.225f };
 
-var history = sales.Take(42).ToList();
+var mlContext = new MLContext();
 
-var actual = sales.Skip(42).Select(x=>x.Sales).ToList();
+var pipeline = mlContext.Transforms
+    .LoadImages("ImageObject", ImageFolder, nameof(ImageInput.ImagePath))
+    .Append(mlContext.Transforms.ResizeImages("ImageObject", 224, 224))
+    .Append(mlContext.Transforms.ExtractPixels("Pixels", "ImageObject", interleavePixelColors: false, scaleImage: 1f / 255f))
+    .Append(mlContext.Transforms.CustomMapping<PixelData, ModelInput>((src, dst) =>
+    {
+        dst.Input = new float[src.Pixels.Length];
+        for (int i = 0; i < src.Pixels.Length; i++)
+        {
+            int colour = i / PixelsPerColour;  
+            dst.Input[i] = (src.Pixels[i] - mean[colour]) / std[colour];
+        }
+    }, contractName: null))
+    .Append(mlContext.Transforms.ApplyOnnxModel(modelFile: ModelFile,
+    outputColumnNames: new[] { OutputName },inputColumnNames: new[] { InputName }));
 
+var model = pipeline.Fit(mlContext.Data.LoadFromEnumerable(new List<ImageInput>()));
 
+var data = mlContext.Data.LoadFromEnumerable(new[] { new ImageInput { ImagePath = ImageName } });
+float[] scores = model.Transform(data).GetColumn<float[]>(OutputName).First();
 
-var data = mlContext.Data.LoadFromEnumerable<MonthlySales>(history);
+float best = scores.Max();
+double[] exp = scores.Select(s => Math.Exp(s - best)).ToArray();
+double total = exp.Sum();
 
-var pipeline = mlContext.Forecasting.ForecastBySsa(
-    outputColumnName: nameof(ForcastedSales.ForcastedSale),
-    inputColumnName: nameof(MonthlySales.Sales), 
-    windowSize: 12, 
-    seriesLength: 36, 
-    trainSize: history.Count,
-    horizon: 6, 
-    confidenceLevel: 0.95f, 
-    confidenceLowerBoundColumn: nameof(ForcastedSales.LowerBound),
-    confidenceUpperBoundColumn: nameof(ForcastedSales.UpperBound));
+string[] labels = File.ReadAllLines(LabelsFile).Select(line => line[(line.IndexOf(' ') + 1)..]).ToArray();
 
-var model = pipeline.Fit(data);
-
-
-var engine = model.CreateTimeSeriesEngine<MonthlySales, ForcastedSales>(mlContext);
-
-var predict = engine.Predict();
-
-for(int i = 0;  i < 6; i++)
+Console.WriteLine("Top 5 predictions:");
+foreach (int position in Enumerable.Range(0, scores.Length).OrderByDescending(p => scores[p]).Take(5))
 {
-    Console.WriteLine($"Month: {i + 1},   Forcast Range = {predict.LowerBound[i]:F0}-{predict.UpperBound[i]:F0} , Actual = {actual[i]:F0}");
+    Console.WriteLine($"  {exp[position] / total,6:P1}  {labels[position]}");
 }
 
-var miss = actual.Zip(predict.ForcastedSale, (a, f) => Math.Abs(a - f)).Average();
-
-Console.WriteLine($"Average Miss: {miss}");
-
-public class MonthlySales { 
-    public float Sales { get; set; }
+public class ImageInput
+{
+    public string ImagePath { get; set; } = "";
 }
 
-public class ForcastedSales
+public class PixelData
 {
-    public float[] ForcastedSale { get; set; }
-    public float[] LowerBound { get; set; }
-    public float[] UpperBound   { get; set; }
+    [VectorType(3 * 224 * 224)]
+    public float[] Pixels { get; set; } = [];
+}
+
+public class ModelInput
+{
+    [ColumnName("input"), VectorType(3 * 224 * 224)]
+    public float[] Input { get; set; } = [];
 }

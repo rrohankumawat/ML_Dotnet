@@ -10,9 +10,22 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.ML" Version="5.0.1" />
     <PackageReference Include="Microsoft.ML.FastTree" Version="5.0.1" />
+    <PackageReference Include="Microsoft.ML.ImageAnalytics" Version="5.0.1" />
     <PackageReference Include="Microsoft.ML.Mkl.Components" Version="5.0.1" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.31.0" />
+    <PackageReference Include="Microsoft.ML.OnnxTransformer" Version="5.0.1" />
     <PackageReference Include="Microsoft.ML.Recommender" Version="0.23.1" />
     <PackageReference Include="Microsoft.ML.TimeSeries" Version="5.0.1" />
+	  <None Update="images\*">
+		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>		  
+	  </None>
+	  <None Update="models\*">
+		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="models\" />
   </ItemGroup>
 
 </Project>
