@@ -1,65 +1,38 @@
-﻿
-using Microsoft.ML;
+﻿using Microsoft.ML;
 using Microsoft.ML.Data;
 
-var mlcontext = new MLContext(seed: 0);
+var mlContext = new MLContext(seed: 0);
 
-string filepath = AppContext.BaseDirectory + "cars.csv";
-
-var fileloader = mlcontext.Data.LoadFromTextFile<CarsData>(filepath, new TextLoader.Options
+var rows = new List<Experience>
 {
-    HasHeader = true,
-    Separators = new[] { ',' },
-    MissingRealsAsNaNs = true,
-});
+    new() { Years = 1,  Salary = 30 }, new() { Years = 2,  Salary = 35 },
+    new() { Years = 3,  Salary = 41 }, new() { Years = 4,  Salary = 46 },
+    new() { Years = 5,  Salary = 52 }, new() { Years = 6,  Salary = 57 },
+    new() { Years = 7,  Salary = 63 }, new() { Years = 8,  Salary = 68 },
+    new() { Years = 9,  Salary = 74 }, new() { Years = 10, Salary = 79 },
+};
+IDataView data = mlContext.Data.LoadFromEnumerable(rows);
 
-var pipeline = mlcontext.Transforms.ReplaceMissingValues(outputColumnName: "FilledAge",inputColumnName: "Age", 
-    replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.Mean)
-    
-    .Append(mlcontext.Transforms.ReplaceMissingValues(outputColumnName: "FilledMileage",inputColumnName: "Mileage",
-    replacementMode: Microsoft.ML.Transforms.MissingValueReplacingEstimator.ReplacementMode.Mean))
-    
-    .Append(mlcontext.Transforms.Categorical.OneHotEncoding(outputColumnName: "BrandEncoded",inputColumnName: "Brand"))
-    
-    .Append(mlcontext.Transforms.Concatenate("Features", "FilledAge","FilledMileage", "BrandEncoded")).
-    
-    Append(mlcontext.Transforms.NormalizeMinMax("Features"));
+var pipeline = mlContext.Transforms
+    .Concatenate("Features", nameof(Experience.Years))
+    .Append(mlContext.Regression.Trainers.Ols(
+        labelColumnName: nameof(Experience.Salary),
+        featureColumnName: "Features"));
 
+ITransformer model = pipeline.Fit(data);
 
-var splits = mlcontext.Data.TrainTestSplit(fileloader, testFraction: 0.2, seed: 1);
-var traindata = splits.TrainSet;
-var testdata = splits.TestSet;
+var engine = mlContext.Model.CreatePredictionEngine<Experience, SalaryPrediction>(model);
+var result = engine.Predict(new Experience { Years = 12 });
+Console.WriteLine($"12 years of experience -> about {result.Salary:F1}k");
 
-var transformer = pipeline.Fit(traindata);
-
-IDataView traindataview = transformer.Transform(traindata);
-
-IDataView testdataview = transformer.Transform(testdata);
-
-var preview = traindataview.Preview(maxRows: 8);
-
-foreach (var row in preview.RowView)
+public class Experience
 {
-    Console.WriteLine(string.Join(" | ", row.Values.Select(v => $"{v.Key}={v.Value}")));
+    public float Years { get; set; }
+    public float Salary { get; set; }
 }
 
-Console.WriteLine("**************************************");
-
-var testpreivew = testdataview.Preview(maxRows: 8);
-
-foreach (var row in testpreivew.RowView)
+public class SalaryPrediction
 {
-    Console.WriteLine(string.Join(" | ", row.Values.Select(v => $"{v.Key}={v.Value}")));
-}
-
-public class CarsData
-{
-    [LoadColumn(0)]
-    public string Brand { get; set; }
-    [LoadColumn(1)]
-    public float Age { get; set; }
-    [LoadColumn(2)]
-    public float Mileage { get; set; }
-    [LoadColumn(3)]
-    public float Price { get; set; }
+    [ColumnName("Score")]
+    public float Salary { get; set; }
 }
