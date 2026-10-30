@@ -15,4 +15,11 @@
 	  </None>
   </ItemGroup>
 
+  <ItemGroup>
+	  <None Update="MLModels\*">
+		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </None>
+  </ItemGroup>
+
+
 </Project>

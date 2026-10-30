@@ -1,6 +1,7 @@
 ﻿
 using Microsoft.ML;
 using Microsoft.ML.Data;
+using System.Text.Json;
 
 var mlContext = new MLContext(seed: 0);
 
@@ -25,6 +26,26 @@ var model = pipeline.Fit(splits.TrainSet);
 var prediction = model.Transform(splits.TestSet);
 
 var metrics = mlContext.MulticlassClassification.Evaluate(prediction, labelColumnName: "Label");
+
+
+string path = AppContext.BaseDirectory+ "MLModels/model-history.json";
+
+var version = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+
+var history = new List<ModelInfo>();
+
+if (File.Exists(path))
+    history = JsonSerializer.Deserialize<List<ModelInfo>>(
+        File.ReadAllText(path)) ?? history;
+
+history.Add(new ModelInfo() { 
+    Version = version,
+    MicroAccuracy = metrics.MicroAccuracy,
+    MacroAccuracy = metrics.MacroAccuracy,
+});
+
+File.WriteAllText(path, JsonSerializer.Serialize(history,
+    new JsonSerializerOptions { WriteIndented = true }));
 
 
 Console.WriteLine(metrics.MicroAccuracy);
@@ -56,4 +77,11 @@ public class TicketPrediction
     public string Category { get; set; } = "";
     [ColumnName("Score")]
     public float[] Scores { get; set; } = [];
+}
+
+public class ModelInfo
+{
+    public string Version { get; set; }
+    public double MicroAccuracy { get; set; }
+    public double MacroAccuracy { get; set; }
 }
